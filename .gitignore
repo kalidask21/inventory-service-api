@@ -11,8 +11,3 @@ CLAUDE.md
 
 # Runtime log files
 logs/
-
-# Node / Wrangler
-node_modules/
-.wrangler/
-dist/

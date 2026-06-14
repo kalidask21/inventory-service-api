@@ -27,6 +27,12 @@ steps:
       - --region=europe-west1
       - --platform=managed
       - --allow-unauthenticated
+      - --port=8080
+      - --memory=512Mi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=3
+      - --set-env-vars=SPRING_PROFILES_ACTIVE=default
 
 images:
   - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
