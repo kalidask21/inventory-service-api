@@ -1,6 +1,6 @@
 # Inventory Management API
 
-A RESTful service that tracks product stock by SKU.
+A RESTful service that tracks product stock by SKU, secured with OAuth2 client-credentials.
 
 ---
 
@@ -20,7 +20,7 @@ A RESTful service that tracks product stock by SKU.
 
 ### Overview
 
-The Inventory Management API is a self-contained Spring Boot microservice backed by an embedded H2 in-memory database. OAuth2 authentication is **currently disabled** — all endpoints are open. No external dependencies are required.
+The Inventory Management API is a self-contained Spring Boot microservice backed by an embedded H2 in-memory database. It is secured with **OAuth2 client-credentials** (Spring Authorization Server + Resource Server, RS256 JWT with rotating JWKs). No external dependencies are required.
 
 ### Architecture Diagram
 
@@ -41,8 +41,18 @@ The Inventory Management API is a self-contained Spring Boot microservice backed
            │  └────────────┬───────────────┘   │
            │               │                   │
            │  ┌────────────▼───────────────┐   │
-           │  │  SecurityFilterChain       │   │
-           │  │  (permitAll — open)        │   │
+           │  │  SecurityFilterChain @1    │   │
+           │  │  (OAuth2 Authorization     │   │
+           │  │   Server — issues JWTs)    │   │
+           │  │  POST /oauth2/token        │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
+           │  │  SecurityFilterChain @2    │   │
+           │  │  (OAuth2 Resource Server   │   │
+           │  │   — validates JWT, checks  │   │
+           │  │   SCOPE_inventory.read /   │   │
+           │  │   SCOPE_inventory.write)   │   │
            │  └────────────┬───────────────┘   │
            │               │                   │
            │  ┌────────────▼───────────────┐   │
@@ -95,7 +105,8 @@ The Inventory Management API is a self-contained Spring Boot microservice backed
 
 | Decision | Choice | Reason |
 |----------|--------|--------|
-| Auth | Disabled (permit-all) | Development mode — OAuth2 config is commented in source and can be re-enabled |
+| Auth | OAuth2 client-credentials (RS256 JWT) | Stateless, scope-based; embedded auth server removes external dependency |
+| JWK rotation | `JwkRotationService` — 30-min rotation, 3-key overlap window | Overlap window (> 10 min token TTL) allows in-flight tokens to remain valid across rotations |
 | Purchase atomicity | Single conditional `UPDATE ... WHERE quantity >= :qty` | Prevents oversell under concurrent load without application-level locking |
 | Additive upsert | `findById` → add or create | `POST /api/inventory/{skuId}` never overwrites — accumulates stock |
 | Error format | `text/plain` strings | Per API contract; avoids Spring's default JSON error wrapper |
@@ -121,11 +132,11 @@ com.nuuly.inventory
 ├── repository/
 │   └── InventoryRepository.java      # JpaRepository + @Modifying atomic UPDATE
 └── config/
-    ├── SecurityConfig.java             # Single permit-all filter chain (OAuth2 disabled)
-    ├── AuthorizationServerConfig.java  # OAuth2 AS config — DISABLED (all beans commented out)
-    ├── JwkRotationService.java         # RSA key rotation — DISABLED (@Service commented out)
+    ├── SecurityConfig.java             # Auth server chain @Order(1) + Resource server chain @Order(2)
+    ├── AuthorizationServerConfig.java  # Registers inventory-client, JWK source, JWT decoder
+    ├── JwkRotationService.java         # @Service — RSA-2048 key generation and 30-min rotation
     ├── RequestMetricsFilter.java       # HTTP request/response metrics logger
-    ├── OpenApiConfig.java              # Swagger UI (no OAuth2 security scheme)
+    ├── OpenApiConfig.java              # Swagger UI with OAuth2 client-credentials scheme
     └── GlobalExceptionHandler.java     # text/plain error mapping, SLF4J logging
 ```
 
@@ -149,12 +160,12 @@ Table: inventory
 
 The Inventory Management API tracks product stock keyed by SKU. It exposes four core operations:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/inventory` | List all inventory items |
-| `GET` | `/api/inventory/{skuId}` | Get current stock for a specific SKU |
-| `POST` | `/api/inventory/{skuId}` | Add stock (additive upsert — creates if absent, adds to existing) |
-| `POST` | `/api/inventory/{skuId}/purchase` | Purchase stock (atomic decrement with sufficiency check) |
+| Method | Endpoint | Required scope | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/api/inventory` | `inventory.read` | List all inventory items |
+| `GET` | `/api/inventory/{skuId}` | `inventory.read` | Get current stock for a specific SKU |
+| `POST` | `/api/inventory/{skuId}` | `inventory.write` | Add stock (additive upsert — creates if absent, adds to existing) |
+| `POST` | `/api/inventory/{skuId}/purchase` | `inventory.write` | Purchase stock (atomic decrement with sufficiency check) |
 
 ### Functional Requirements
 
@@ -180,11 +191,13 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 - All error responses (`400`, `404`) use `Content-Type: text/plain` with a plain string body — not JSON.
 
 **FR-6 — API documentation**
-- Live Swagger UI at `/swagger-ui.html` (no authorization required).
+- Live Swagger UI at `/swagger-ui.html`. Click **Authorize**, enter client credentials, select scopes, then call endpoints directly from the browser.
 
 **FR-7 — Authentication & authorization**
-- OAuth2 is currently **disabled**. All endpoints are open (no token required).
-- To re-enable: uncomment `@Configuration` in `AuthorizationServerConfig.java`, `@Service` in `JwkRotationService.java`, and restore the two filter chains in `SecurityConfig.java`.
+- All `/api/inventory/**` endpoints require a valid JWT bearer token.
+- Missing token → `401 Unauthorized`. Valid token with wrong scope → `403 Forbidden`.
+- Token is issued by the embedded auth server at `POST /oauth2/token` (client-credentials grant).
+- Public endpoints (no token required): `/swagger-ui/**`, `/v3/api-docs/**`, `/oauth2/token`, `/oauth2/jwks`, `/actuator/health`, `/h2-console/**`.
 
 **FR-8 — Seed data**
 - On startup, 100 dummy SKUs are loaded via `src/main/resources/data.sql` (Spring SQL init).
@@ -202,9 +215,9 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 | Web | Spring Web (Spring MVC) |
 | Persistence | Spring Data JPA + H2 (in-memory) |
 | Validation | Jakarta Bean Validation (`@Valid`, `@Min`, `@NotNull`) |
-| Security | Spring Security — permit-all (OAuth2 disabled; config retained in source) |
+| Security | Spring Security — OAuth2 Authorization Server + Resource Server, RS256 JWT |
 | Logging | SLF4J + Logback — console + rolling file (`logs/inventory-api.log`) |
-| API Docs | springdoc-openapi 2.x (Swagger UI) |
+| API Docs | springdoc-openapi 2.x (Swagger UI with OAuth2 Authorize flow) |
 | Health | Spring Boot Actuator |
 | Build | Maven 3.9+ (bundled `./mvnw` wrapper) |
 | Container | Docker (multi-stage) + Docker Compose |
@@ -227,7 +240,7 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 | Docker Engine | 24+ |
 | Docker Compose | v2+ (`docker compose`) |
 
-No external database or message broker is required — the app uses an embedded H2 in-memory store.
+No external database or message broker is required — the app uses an embedded H2 in-memory store and an embedded OAuth2 authorization server.
 
 ---
 
@@ -276,7 +289,8 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 
 | URL | Description |
 |-----|-------------|
-| `http://localhost:8080/swagger-ui.html` | Interactive API docs (Swagger UI) |
+| `http://localhost:8080/swagger-ui.html` | Interactive API docs — click **Authorize** to log in |
+| `http://localhost:8080/oauth2/token` | Token endpoint (POST, Basic auth) |
 | `http://localhost:8080/actuator/health` | Health check endpoint |
 | `http://localhost:8080/h2-console` | H2 database console (dev only) |
 
@@ -284,29 +298,42 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 
 ### Quick curl examples
 
-No `Authorization` header is required — OAuth2 is disabled.
+All `/api/inventory` endpoints require a JWT bearer token. Fetch one first:
 
-**List all inventory:**
+**Step 1 — Get a token:**
 ```bash
-curl http://localhost:8080/api/inventory
+TOKEN=$(curl -s \
+  -u inventory-client:inventory-secret \
+  -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
+  http://localhost:8080/oauth2/token \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 ```
 
-**Get a specific SKU:**
+**Step 2 — Use the token in API calls:**
+
+List all inventory:
 ```bash
-curl http://localhost:8080/api/inventory/CW-0001-BM-02
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/inventory
 ```
 
-**Add stock (creates SKU if absent, otherwise adds to existing):**
+Get a specific SKU:
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/inventory/CW-0001-BM-02
+```
+
+Add stock (creates SKU if absent, otherwise adds to existing):
 ```bash
 curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"quantity": 50}' \
   http://localhost:8080/api/inventory/MY-SKU-001
 ```
 
-**Purchase stock:**
+Purchase stock:
 ```bash
 curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"quantity": 5}' \
   http://localhost:8080/api/inventory/MY-SKU-001/purchase
@@ -316,18 +343,31 @@ curl -X POST \
 
 ## 6. API Security
 
-OAuth2 is currently **disabled** for development convenience. All endpoints are accessible without a token.
+The API uses **OAuth2 client-credentials** flow. The embedded Spring Authorization Server issues RS256 JWTs; the Resource Server validates them on every request.
 
-### Re-enabling OAuth2
+### Client credentials
 
-To restore full OAuth2 client-credentials security:
+| Field | Value |
+|-------|-------|
+| Client ID | `inventory-client` |
+| Client Secret | `inventory-secret` |
+| Grant type | `client_credentials` |
+| Token TTL | 10 minutes |
+| Auth methods | `CLIENT_SECRET_BASIC` (recommended), `CLIENT_SECRET_POST` |
 
-1. **`AuthorizationServerConfig.java`** — uncomment `// @Configuration` and all `// @Bean` methods.
-2. **`JwkRotationService.java`** — uncomment `// @Service`.
-3. **`SecurityConfig.java`** — uncomment `authorizationServerFilterChain` and `resourceServerFilterChain`; remove the `openFilterChain` bean.
-4. **`OpenApiConfig.java`** — restore the OAuth2 `SecurityScheme` and `SecurityRequirement` in `inventoryOpenApi()`.
+### Scopes
 
-When re-enabled the access rules are:
+| Scope | Grants access to |
+|-------|-----------------|
+| `inventory.read` | `GET /api/inventory`, `GET /api/inventory/{skuId}` |
+| `inventory.write` | `POST /api/inventory/{skuId}`, `POST /api/inventory/{skuId}/purchase` |
+
+Request both scopes in a single token for full access:
+```bash
+-d 'grant_type=client_credentials&scope=inventory.read inventory.write'
+```
+
+### Authorization rules
 
 | Endpoint | Required scope | No token | Wrong scope |
 |----------|---------------|----------|-------------|
@@ -336,7 +376,45 @@ When re-enabled the access rules are:
 | `POST /api/inventory/{skuId}` | `inventory.write` | 401 | 403 |
 | `POST /api/inventory/{skuId}/purchase` | `inventory.write` | 401 | 403 |
 
-Client credentials: `inventory-client` / `inventory-secret`, grant type `client_credentials`.
+### Public endpoints (no token required)
+
+| Path | Purpose |
+|------|---------|
+| `POST /oauth2/token` | Token issuance |
+| `GET /oauth2/jwks` | JWK set (for external JWT verification) |
+| `/swagger-ui/**`, `/v3/api-docs/**` | API documentation |
+| `/actuator/health` | Health check |
+| `/h2-console/**` | H2 dev console |
+
+### Using Swagger UI with OAuth2
+
+1. Open `http://localhost:8080/swagger-ui.html`
+2. Click the **Authorize** button (lock icon, top right)
+3. Enter **Client ID**: `inventory-client` and **Client Secret**: `inventory-secret`
+4. Select scopes: `inventory.read` and `inventory.write`
+5. Click **Authorize** → **Close**
+6. All subsequent "Try it out" calls will include a valid bearer token automatically
+
+### JWK rotation
+
+`JwkRotationService` generates an RSA-2048 key pair on startup and rotates every **30 minutes**, retaining up to 3 keys. The overlap window (> 10-minute token TTL) ensures in-flight tokens remain valid across key rotations. The JWK set is published at `/oauth2/jwks`.
+
+### Disabling OAuth2 (development mode)
+
+To run without authentication:
+
+1. **`AuthorizationServerConfig.java`** — comment out `@Configuration` and all `@Bean` annotations.
+2. **`JwkRotationService.java`** — comment out `@Service`.
+3. **`SecurityConfig.java`** — comment out `authorizationServerFilterChain` and `resourceServerFilterChain`; add a permit-all chain:
+   ```java
+   @Bean
+   public SecurityFilterChain openFilterChain(HttpSecurity http) throws Exception {
+       http.authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+           .csrf(csrf -> csrf.disable());
+       return http.build();
+   }
+   ```
+4. **`OpenApiConfig.java`** — remove the `SecurityScheme` and `SecurityRequirement` from `inventoryOpenApi()`.
 
 ---
 

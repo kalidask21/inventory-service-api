@@ -13,7 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
-// @Service  — disabled; OAuth2 auth server is disabled
+@Service
 public class JwkRotationService {
 
     // RSA JWK rotation disabled — re-enable @Service above to restore.
