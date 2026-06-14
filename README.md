@@ -123,7 +123,7 @@ Client                    Inventory API
 | Additive upsert | `findById` → add or create | `POST /inventory/{skuId}` never overwrites — accumulates stock |
 | Error format | `text/plain` strings | Per API contract; avoids Spring's default JSON error wrapper |
 | JWK rotation | In-memory `ConcurrentLinkedDeque`, max 3 keys | Retired keys published in JWKS during overlap window > token TTL |
-| Seed data initialization | `schema.sql` + `data.sql` via Spring SQL init | Declarative SQL scripts replace the Java `DataSeeder`; `ddl-auto: none` so Hibernate never auto-creates the schema |
+| Seed data initialization | `schema.sql` + `data.sql` via Spring SQL init | Scripts run before Hibernate (`ddl-auto: none`); table is created by `schema.sql`, 100 SKUs inserted by `data.sql` on every startup |
 
 ### Component Map
 
@@ -439,5 +439,20 @@ docker compose logs -f api
 ### H2 Console (dev only)
 
 The H2 in-memory database console is available at `http://localhost:8080/h2-console` during local development.
+
+**Connection settings:**
+
+| Field | Value |
+|-------|-------|
+| Driver Class | `org.h2.Driver` |
+| JDBC URL | `jdbc:h2:mem:inventory` |
+| User Name | `sa` |
+| Password | *(leave blank)* |
+
+After connecting, expand the left-panel tree: **`PUBLIC`** → **`Tables`** → **`INVENTORY`**. You can also run:
+
+```sql
+SELECT * FROM inventory LIMIT 10;
+```
 
 > The H2 console is disabled outside the local/dev profile and must not be exposed in production.
