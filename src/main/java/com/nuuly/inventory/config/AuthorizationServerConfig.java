@@ -36,6 +36,7 @@ public class AuthorizationServerConfig {
                 .clientId("inventory-client")
                 .clientSecret(encoder.encode("inventory-secret"))
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
                 .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
                 .scope("inventory.read")
                 .scope("inventory.write")
