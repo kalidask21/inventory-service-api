@@ -123,7 +123,7 @@ Client                    Inventory API
 | Additive upsert | `findById` → add or create | `POST /inventory/{skuId}` never overwrites — accumulates stock |
 | Error format | `text/plain` strings | Per API contract; avoids Spring's default JSON error wrapper |
 | JWK rotation | In-memory `ConcurrentLinkedDeque`, max 3 keys | Retired keys published in JWKS during overlap window > token TTL |
-| Seed data isolation | `@Profile("!test")` on `DataSeeder` | Integration tests always start from a clean, empty database |
+| Seed data initialization | `schema.sql` + `data.sql` via Spring SQL init | Declarative SQL scripts replace the Java `DataSeeder`; `ddl-auto: none` so Hibernate never auto-creates the schema |
 
 ### Component Map
 
@@ -148,8 +148,7 @@ com.nuuly.inventory
     ├── SecurityConfig.java             # Two filter chains (AS + RS)
     ├── JwkRotationService.java         # RSA key generation and rotation
     ├── OpenApiConfig.java              # Swagger UI + OAuth2 security scheme
-    ├── GlobalExceptionHandler.java     # text/plain error mapping
-    └── DataSeeder.java                 # 100-item seed on startup (!test profile)
+    └── GlobalExceptionHandler.java     # text/plain error mapping
 ```
 
 ### Data Model
@@ -211,8 +210,9 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 - Missing token → `401`; valid token with wrong scope → `403`.
 
 **FR-8 — Seed data**
-- On normal startup, 100 dummy SKUs are seeded into the in-memory database.
-- Seeding is disabled under the `test` profile so integration tests start from a clean DB.
+- On startup, 100 dummy SKUs are loaded via `src/main/resources/data.sql` (Spring SQL init).
+- The table schema is created by `src/main/resources/schema.sql`; Hibernate `ddl-auto` is set to `none`.
+- Integration tests call `repo.deleteAll()` before each test case, so seed data does not affect test results.
 
 ---
 
@@ -268,7 +268,7 @@ No external database or message broker is required — the app uses an embedded 
 ./mvnw spring-boot:run
 ```
 
-On startup, 100 dummy SKUs are seeded automatically. The application is ready when you see:
+On startup, the schema is created from `schema.sql` and 100 dummy SKUs are loaded from `data.sql` automatically. The application is ready when you see:
 
 ```
 Started InventoryApiApplication in X.XXX seconds

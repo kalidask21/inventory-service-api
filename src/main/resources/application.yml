@@ -6,8 +6,12 @@ spring:
     password: ""
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
+    defer-datasource-initialization: true
     open-in-view: false
+  sql:
+    init:
+      mode: always
   h2:
     console:
       enabled: true
