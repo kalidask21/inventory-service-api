@@ -1,0 +1,10 @@
+# Maven
+target/
+*.class
+
+# macOS
+.DS_Store
+
+# Docs and Claude
+docs/
+CLAUDE.md
