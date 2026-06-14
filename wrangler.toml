@@ -1,0 +1,26 @@
+name = "inventory-api"
+main = "cf/worker.ts"
+compatibility_date = "2025-06-14"
+
+# ---------------------------------------------------------------------------
+# Cloudflare Workers Containers (beta)
+# https://developers.cloudflare.com/workers/containers/
+#
+# The Spring Boot container runs as a Durable Object. A single instance is
+# forced (instances = 1) because H2 is in-memory — multiple instances would
+# have separate, inconsistent databases.
+# ---------------------------------------------------------------------------
+
+[durable_objects]
+bindings = [
+  { name = "INVENTORY_CONTAINER", class_name = "InventoryContainer" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["InventoryContainer"]
+
+[[containers]]
+class_name = "InventoryContainer"
+image = "ghcr.io/kalidask21/inventory-service-api:latest"
+instances = 1
