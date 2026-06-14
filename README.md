@@ -6,16 +6,169 @@ A RESTful service that tracks product stock by SKU.
 
 ## Table of Contents
 
-1. [Service Description & Functional Requirements](#1-service-description--functional-requirements)
-2. [Tech Stack](#2-tech-stack)
-3. [Prerequisites](#3-prerequisites)
-4. [Running Locally](#4-running-locally)
-5. [API Security](#5-api-security)
-6. [Observability & Logging](#6-observability--logging)
+1. [High-Level System Design](#1-high-level-system-design)
+2. [Service Description & Functional Requirements](#2-service-description--functional-requirements)
+3. [Tech Stack](#3-tech-stack)
+4. [Prerequisites](#4-prerequisites)
+5. [Running Locally](#5-running-locally)
+6. [API Security](#6-api-security)
+7. [Observability & Logging](#7-observability--logging)
 
 ---
 
-## 1. Service Description & Functional Requirements
+## 1. High-Level System Design
+
+### Overview
+
+The Inventory Management API is a self-contained Spring Boot microservice. It hosts both the **OAuth2 Authorization Server** (token issuance) and the **OAuth2 Resource Server** (token validation) in the same process, backed by an embedded H2 in-memory database. No external dependencies are required.
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Client (curl / Swagger UI / upstream service)│
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │ HTTPS / HTTP
+           ┌───────────────▼──────────────────┐
+           │        Spring Boot Application    │
+           │            (port 8080)            │
+           │                                   │
+           │  ┌────────────────────────────┐   │
+           │  │   Security Filter Chains   │   │
+           │  │  ┌─────────────────────┐   │   │
+           │  │  │  @Order(1)          │   │   │
+           │  │  │  Authorization      │   │   │
+           │  │  │  Server Filter      │◄──┼───┼── POST /oauth2/token
+           │  │  │  Chain              │   │   │   (client_credentials)
+           │  │  │  /oauth2/**         │   │   │
+           │  │  └─────────────────────┘   │   │
+           │  │  ┌─────────────────────┐   │   │
+           │  │  │  @Order(2)          │   │   │
+           │  │  │  Resource Server    │◄──┼───┼── Bearer JWT
+           │  │  │  Filter Chain       │   │   │   (all /inventory/**)
+           │  │  │  JWT validation     │   │   │
+           │  │  └─────────────────────┘   │   │
+           │  └────────────────────────────┘   │
+           │                                   │
+           │  ┌────────────────────────────┐   │
+           │  │     InventoryController    │   │
+           │  │  GET  /inventory           │   │
+           │  │  GET  /inventory/{skuId}   │   │
+           │  │  POST /inventory/{skuId}   │   │
+           │  │  POST /inventory/{skuId}   │   │
+           │  │       /purchase            │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
+           │  │     InventoryService       │   │
+           │  │  - get()                   │   │
+           │  │  - listAll()               │   │
+           │  │  - addStock()  [upsert]    │   │
+           │  │  - purchase()  [atomic]    │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
+           │  │   InventoryRepository      │   │
+           │  │   (Spring Data JPA)        │   │
+           │  │   decrementIfSufficient()  │   │
+           │  │   [single conditional SQL  │   │
+           │  │    UPDATE — no oversell]   │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
+           │  │        H2 In-Memory DB     │   │
+           │  │        (inventory table)   │   │
+           │  │   skuId VARCHAR (PK)       │   │
+           │  │   quantity INT             │   │
+           │  └────────────────────────────┘   │
+           │                                   │
+           │  ┌────────────────────────────┐   │
+           │  │  GlobalExceptionHandler    │   │
+           │  │  (@RestControllerAdvice)   │   │
+           │  │  All errors → text/plain   │   │
+           │  └────────────────────────────┘   │
+           └───────────────────────────────────┘
+```
+
+### Token Issuance Flow
+
+```
+Client                    Inventory API
+  │                            │
+  │── POST /oauth2/token ──────►│
+  │   Basic: inventory-client   │
+  │         :inventory-secret   │  ┌─────────────────────────────┐
+  │   body: grant_type=         │  │  AuthorizationServerConfig  │
+  │     client_credentials      │  │  - Validates client creds   │
+  │   scope: inventory.read     │  │  - Signs JWT with active    │
+  │          inventory.write    │──►    RSA key (RS256)          │
+  │                             │  │  - TTL: 10 minutes          │
+  │◄── { access_token: "..." }──│  └─────────────────────────────┘
+  │
+  │── GET /inventory ──────────►│
+  │   Authorization: Bearer ... │  ┌─────────────────────────────┐
+  │                             │  │  Resource Server Filter     │
+  │                             │──►  - Validates JWT signature  │
+  │                             │  │    using shared JWKSource   │
+  │                             │  │  - Checks scope             │
+  │◄── 200 [{ skuId, quantity}]─│  └─────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Auth server co-location | Same JVM as resource server | Simplified deployment; shared `JWKSource` bean avoids HTTP OIDC discovery |
+| Purchase atomicity | Single conditional `UPDATE ... WHERE quantity >= :qty` | Prevents oversell under concurrent load without application-level locking |
+| Additive upsert | `findById` → add or create | `POST /inventory/{skuId}` never overwrites — accumulates stock |
+| Error format | `text/plain` strings | Per API contract; avoids Spring's default JSON error wrapper |
+| JWK rotation | In-memory `ConcurrentLinkedDeque`, max 3 keys | Retired keys published in JWKS during overlap window > token TTL |
+| Seed data isolation | `@Profile("!test")` on `DataSeeder` | Integration tests always start from a clean, empty database |
+
+### Component Map
+
+```
+com.nuuly.inventory
+├── InventoryApiApplication.java      # @SpringBootApplication @EnableScheduling
+├── api/
+│   ├── InventoryController.java      # 4 REST endpoints, delegates to service
+│   └── dto/
+│       ├── InventoryQuantityRequest  # @NotNull @Min(1) Integer quantity
+│       └── InventoryItemResponse     # record + static from(InventoryItem)
+├── domain/
+│   ├── InventoryItem.java            # @Entity: skuId (PK), quantity
+│   ├── SkuNotFoundException.java     # → HTTP 404 text/plain
+│   └── InsufficientInventoryException.java  # → HTTP 400 "Insufficient inventory"
+├── service/
+│   └── InventoryService.java         # Business logic, @Transactional
+├── repository/
+│   └── InventoryRepository.java      # JpaRepository + @Modifying atomic UPDATE
+└── config/
+    ├── AuthorizationServerConfig.java  # OAuth2 AS, JWKSource, JwtDecoder
+    ├── SecurityConfig.java             # Two filter chains (AS + RS)
+    ├── JwkRotationService.java         # RSA key generation and rotation
+    ├── OpenApiConfig.java              # Swagger UI + OAuth2 security scheme
+    ├── GlobalExceptionHandler.java     # text/plain error mapping
+    └── DataSeeder.java                 # 100-item seed on startup (!test profile)
+```
+
+### Data Model
+
+```
+Table: inventory
+┌────────────────┬─────────┬────────────────────────────────┐
+│ Column         │ Type    │ Notes                          │
+├────────────────┼─────────┼────────────────────────────────┤
+│ sku_id         │ VARCHAR │ Primary key (SKU string)       │
+│ quantity       │ INTEGER │ Current stock (≥ 0, enforced)  │
+└────────────────┴─────────┴────────────────────────────────┘
+```
+
+> **H2 caveat:** Data is in-memory and lost on restart. For production, replace the H2 datasource with Cloud SQL (PostgreSQL/MySQL) — no application code changes required, only `application.yml` datasource config.
+
+---
+
+## 2. Service Description & Functional Requirements
 
 The Inventory Management API tracks product stock keyed by SKU. It exposes four core operations:
 
@@ -63,7 +216,7 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 
 ---
 
-## 2. Tech Stack
+## 3. Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
@@ -80,7 +233,7 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 
 ---
 
-## 3. Prerequisites
+## 4. Prerequisites
 
 ### Local (Maven)
 
@@ -100,7 +253,7 @@ No external database or message broker is required — the app uses an embedded 
 
 ---
 
-## 4. Running Locally
+## 5. Running Locally
 
 ### Option A — Maven (fastest)
 
@@ -155,9 +308,9 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 
 ### Quick curl examples
 
-**Get a token** (replace `<client_id>` and `<client_secret>` with your configured credentials):
+**Get a token:**
 ```bash
-TOKEN=$(curl -s -u <client_id>:<client_secret> \
+TOKEN=$(curl -s -u inventory-client:inventory-secret \
   -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
   http://localhost:8080/oauth2/token | jq -r .access_token)
 ```
@@ -190,7 +343,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## 5. API Security
+## 6. API Security
 
 ### Overview
 
@@ -238,7 +391,7 @@ Signing keys rotate every 30 minutes. Retired public keys remain published in th
 
 ```bash
 # Step 1: Get a token
-curl -s -u <client_id>:<client_secret> \
+curl -s -u inventory-client:inventory-secret \
   -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
   http://localhost:8080/oauth2/token
 # Response: { "access_token": "...", "token_type": "Bearer", "expires_in": 600 }
@@ -249,7 +402,7 @@ curl -H "Authorization: Bearer <access_token>" http://localhost:8080/inventory
 
 ---
 
-## 6. Observability & Logging
+## 7. Observability & Logging
 
 ### Health endpoint
 
