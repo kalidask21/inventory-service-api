@@ -37,52 +37,34 @@ class InventoryIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private String bearerToken;
-
     @BeforeEach
-    void setup() throws Exception {
+    void setup() {
         repo.deleteAll();
-        bearerToken = fetchToken();
+        // OAuth2 token fetch removed — auth is disabled
     }
 
     // -------------------------------------------------------------------------
-    // Token helpers
+    // OAuth2 token helpers (disabled — auth server removed)
     // -------------------------------------------------------------------------
 
-    private String fetchToken() throws Exception {
-        MvcResult result = mockMvc.perform(post("/oauth2/token")
-                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                        .content("grant_type=client_credentials&scope=inventory.read inventory.write")
-                        .header("Authorization", basicAuth("inventory-client", "inventory-secret")))
-                .andExpect(status().isOk())
-                .andReturn();
-        Map<?, ?> body = objectMapper.readValue(result.getResponse().getContentAsString(), Map.class);
-        return (String) body.get("access_token");
-    }
-
-    private String basicAuth(String user, String pass) {
-        String creds = user + ":" + pass;
-        return "Basic " + java.util.Base64.getEncoder().encodeToString(creds.getBytes());
-    }
+    // private String fetchToken() throws Exception { ... }
+    // private String basicAuth(String user, String pass) { ... }
 
     private String json(Map<String, ?> map) throws Exception {
         return objectMapper.writeValueAsString(map);
     }
 
     // -------------------------------------------------------------------------
-    // Auth tests (FR security)
+    // Auth tests (FR security) — updated for no-auth mode
     // -------------------------------------------------------------------------
 
-    @Test
-    void getInventory_withoutToken_returns401() throws Exception {
-        mockMvc.perform(get("/inventory"))
-                .andExpect(status().isUnauthorized());
-    }
+    // OAuth disabled: unauthenticated requests are now permitted (no 401)
+    // @Test
+    // void getInventory_withoutToken_returns401() { ... }
 
     @Test
-    void getInventory_withReadScopeToken_returns200() throws Exception {
-        mockMvc.perform(get("/inventory")
-                        .header("Authorization", "Bearer " + bearerToken))
+    void getInventory_noAuth_returns200() throws Exception {
+        mockMvc.perform(get("/api/inventory"))
                 .andExpect(status().isOk());
     }
 
@@ -94,8 +76,7 @@ class InventoryIntegrationTest {
     void getInventory_existingSku_returns200() throws Exception {
         repo.save(new InventoryItem("widget", 50));
 
-        mockMvc.perform(get("/inventory/widget")
-                        .header("Authorization", "Bearer " + bearerToken))
+        mockMvc.perform(get("/api/inventory/widget"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.skuId").value("widget"))
@@ -104,8 +85,7 @@ class InventoryIntegrationTest {
 
     @Test
     void getInventory_missingSku_returns404PlainText() throws Exception {
-        mockMvc.perform(get("/inventory/nonexistent")
-                        .header("Authorization", "Bearer " + bearerToken))
+        mockMvc.perform(get("/api/inventory/nonexistent"))
                 .andExpect(status().isNotFound())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_PLAIN));
     }
@@ -116,8 +96,7 @@ class InventoryIntegrationTest {
 
     @Test
     void addStock_newSku_creates() throws Exception {
-        mockMvc.perform(post("/inventory/new-sku")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/new-sku")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 10))))
                 .andExpect(status().isOk())
@@ -129,8 +108,7 @@ class InventoryIntegrationTest {
     void addStock_existingSku_addsQuantity() throws Exception {
         repo.save(new InventoryItem("widget", 30));
 
-        mockMvc.perform(post("/inventory/widget")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 20))))
                 .andExpect(status().isOk())
@@ -139,8 +117,7 @@ class InventoryIntegrationTest {
 
     @Test
     void addStock_invalidQuantity_returns400PlainText() throws Exception {
-        mockMvc.perform(post("/inventory/widget")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 0))))
                 .andExpect(status().isBadRequest())
@@ -149,8 +126,7 @@ class InventoryIntegrationTest {
 
     @Test
     void addStock_missingQuantity_returns400PlainText() throws Exception {
-        mockMvc.perform(post("/inventory/widget")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest())
@@ -159,8 +135,7 @@ class InventoryIntegrationTest {
 
     @Test
     void addStock_malformedJson_returns400PlainText() throws Exception {
-        mockMvc.perform(post("/inventory/widget")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("not-json"))
                 .andExpect(status().isBadRequest())
@@ -175,8 +150,7 @@ class InventoryIntegrationTest {
     void purchase_sufficientStock_decrements() throws Exception {
         repo.save(new InventoryItem("widget", 20));
 
-        mockMvc.perform(post("/inventory/widget/purchase")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget/purchase")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 5))))
                 .andExpect(status().isOk())
@@ -187,8 +161,7 @@ class InventoryIntegrationTest {
     void purchase_insufficientStock_returns400WithExactMessage() throws Exception {
         repo.save(new InventoryItem("widget", 3));
 
-        mockMvc.perform(post("/inventory/widget/purchase")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget/purchase")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 5))))
                 .andExpect(status().isBadRequest())
@@ -198,8 +171,7 @@ class InventoryIntegrationTest {
 
     @Test
     void purchase_missingSku_returns404PlainText() throws Exception {
-        mockMvc.perform(post("/inventory/ghost/purchase")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/ghost/purchase")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", 1))))
                 .andExpect(status().isNotFound())
@@ -208,8 +180,7 @@ class InventoryIntegrationTest {
 
     @Test
     void purchase_invalidQuantity_returns400PlainText() throws Exception {
-        mockMvc.perform(post("/inventory/widget/purchase")
-                        .header("Authorization", "Bearer " + bearerToken)
+        mockMvc.perform(post("/api/inventory/widget/purchase")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("quantity", -1))))
                 .andExpect(status().isBadRequest())
@@ -222,8 +193,7 @@ class InventoryIntegrationTest {
 
     @Test
     void listInventory_empty_returnsEmptyArray() throws Exception {
-        mockMvc.perform(get("/inventory")
-                        .header("Authorization", "Bearer " + bearerToken))
+        mockMvc.perform(get("/api/inventory"))
                 .andExpect(status().isOk())
                 .andExpect(content().json("[]"));
     }
@@ -233,8 +203,7 @@ class InventoryIntegrationTest {
         repo.save(new InventoryItem("a", 10));
         repo.save(new InventoryItem("b", 20));
 
-        mockMvc.perform(get("/inventory")
-                        .header("Authorization", "Bearer " + bearerToken))
+        mockMvc.perform(get("/api/inventory"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2));
     }
@@ -260,8 +229,8 @@ class InventoryIntegrationTest {
             futures.add(executor.submit(() -> {
                 try {
                     latch.await();
-                    MvcResult result = mockMvc.perform(post("/inventory/concurrent-sku/purchase")
-                                    .header("Authorization", "Bearer " + bearerToken)
+                    MvcResult result = mockMvc.perform(post("/api/inventory/concurrent-sku/purchase")
+            
                                     .contentType(MediaType.APPLICATION_JSON)
                                     .content("{\"quantity\":" + purchaseQty + "}"))
                             .andReturn();

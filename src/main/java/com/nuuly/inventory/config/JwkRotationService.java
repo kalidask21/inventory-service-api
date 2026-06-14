@@ -13,10 +13,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
-@Service
+// @Service  — disabled; OAuth2 auth server is disabled
 public class JwkRotationService {
 
-    // Overlap window: keep retired keys for 20 min (> 10 min token TTL)
+    // RSA JWK rotation disabled — re-enable @Service above to restore.
+    // Overlap window kept retired keys for 20 min (> 10 min token TTL).
     private static final int MAX_KEYS = 3;
 
     private final List<RSAKey> keys = new ArrayList<>();

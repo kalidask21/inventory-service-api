@@ -20,42 +20,37 @@ A RESTful service that tracks product stock by SKU.
 
 ### Overview
 
-The Inventory Management API is a self-contained Spring Boot microservice. It hosts both the **OAuth2 Authorization Server** (token issuance) and the **OAuth2 Resource Server** (token validation) in the same process, backed by an embedded H2 in-memory database. No external dependencies are required.
+The Inventory Management API is a self-contained Spring Boot microservice backed by an embedded H2 in-memory database. OAuth2 authentication is **currently disabled** — all endpoints are open. No external dependencies are required.
 
 ### Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Client (curl / Swagger UI / upstream service)│
+│                    Client (curl / Swagger UI / upstream service)     │
 └──────────────────────────┬──────────────────────────────────────────┘
-                           │ HTTPS / HTTP
+                           │ HTTP
            ┌───────────────▼──────────────────┐
            │        Spring Boot Application    │
            │            (port 8080)            │
            │                                   │
            │  ┌────────────────────────────┐   │
-           │  │   Security Filter Chains   │   │
-           │  │  ┌─────────────────────┐   │   │
-           │  │  │  @Order(1)          │   │   │
-           │  │  │  Authorization      │   │   │
-           │  │  │  Server Filter      │◄──┼───┼── POST /oauth2/token
-           │  │  │  Chain              │   │   │   (client_credentials)
-           │  │  │  /oauth2/**         │   │   │
-           │  │  └─────────────────────┘   │   │
-           │  │  ┌─────────────────────┐   │   │
-           │  │  │  @Order(2)          │   │   │
-           │  │  │  Resource Server    │◄──┼───┼── Bearer JWT
-           │  │  │  Filter Chain       │   │   │   (all /inventory/**)
-           │  │  │  JWT validation     │   │   │
-           │  │  └─────────────────────┘   │   │
-           │  └────────────────────────────┘   │
-           │                                   │
-           │  ┌────────────────────────────┐   │
+           │  │   RequestMetricsFilter     │   │
+           │  │   (OncePerRequestFilter)   │   │
+           │  │   Logs: METHOD /path →     │   │
+           │  │   status=N duration=Nms    │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
+           │  │  SecurityFilterChain       │   │
+           │  │  (permitAll — open)        │   │
+           │  └────────────┬───────────────┘   │
+           │               │                   │
+           │  ┌────────────▼───────────────┐   │
            │  │     InventoryController    │   │
-           │  │  GET  /inventory           │   │
-           │  │  GET  /inventory/{skuId}   │   │
-           │  │  POST /inventory/{skuId}   │   │
-           │  │  POST /inventory/{skuId}   │   │
+           │  │  GET  /api/inventory       │   │
+           │  │  GET  /api/inventory/{id}  │   │
+           │  │  POST /api/inventory/{id}  │   │
+           │  │  POST /api/inventory/{id}  │   │
            │  │       /purchase            │   │
            │  └────────────┬───────────────┘   │
            │               │                   │
@@ -87,43 +82,25 @@ The Inventory Management API is a self-contained Spring Boot microservice. It ho
            │  │  (@RestControllerAdvice)   │   │
            │  │  All errors → text/plain   │   │
            │  └────────────────────────────┘   │
+           │                                   │
+           │  ┌────────────────────────────┐   │
+           │  │  Logback (SLF4J)           │   │
+           │  │  Console + Rolling File    │   │
+           │  │  logs/inventory-api.log    │   │
+           │  └────────────────────────────┘   │
            └───────────────────────────────────┘
-```
-
-### Token Issuance Flow
-
-```
-Client                    Inventory API
-  │                            │
-  │── POST /oauth2/token ──────►│
-  │   Basic: inventory-client   │
-  │         :inventory-secret   │  ┌─────────────────────────────┐
-  │   body: grant_type=         │  │  AuthorizationServerConfig  │
-  │     client_credentials      │  │  - Validates client creds   │
-  │   scope: inventory.read     │  │  - Signs JWT with active    │
-  │          inventory.write    │──►    RSA key (RS256)          │
-  │                             │  │  - TTL: 10 minutes          │
-  │◄── { access_token: "..." }──│  └─────────────────────────────┘
-  │
-  │── GET /inventory ──────────►│
-  │   Authorization: Bearer ... │  ┌─────────────────────────────┐
-  │                             │  │  Resource Server Filter     │
-  │                             │──►  - Validates JWT signature  │
-  │                             │  │    using shared JWKSource   │
-  │                             │  │  - Checks scope             │
-  │◄── 200 [{ skuId, quantity}]─│  └─────────────────────────────┘
 ```
 
 ### Key Design Decisions
 
 | Decision | Choice | Reason |
 |----------|--------|--------|
-| Auth server co-location | Same JVM as resource server | Simplified deployment; shared `JWKSource` bean avoids HTTP OIDC discovery |
+| Auth | Disabled (permit-all) | Development mode — OAuth2 config is commented in source and can be re-enabled |
 | Purchase atomicity | Single conditional `UPDATE ... WHERE quantity >= :qty` | Prevents oversell under concurrent load without application-level locking |
-| Additive upsert | `findById` → add or create | `POST /inventory/{skuId}` never overwrites — accumulates stock |
+| Additive upsert | `findById` → add or create | `POST /api/inventory/{skuId}` never overwrites — accumulates stock |
 | Error format | `text/plain` strings | Per API contract; avoids Spring's default JSON error wrapper |
-| JWK rotation | In-memory `ConcurrentLinkedDeque`, max 3 keys | Retired keys published in JWKS during overlap window > token TTL |
-| Seed data initialization | `schema.sql` + `data.sql` via Spring SQL init | Scripts run before Hibernate (`ddl-auto: none`); table is created by `schema.sql`, 100 SKUs inserted by `data.sql` on every startup |
+| Log file | `logs/inventory-api.log` (rolling, daily, gzip) | Persisted log separate from console for production audit and debugging |
+| Seed data initialization | `schema.sql` + `data.sql` via Spring SQL init | Scripts run before Hibernate (`ddl-auto: none`); 100 SKUs loaded on every startup |
 
 ### Component Map
 
@@ -131,7 +108,7 @@ Client                    Inventory API
 com.nuuly.inventory
 ├── InventoryApiApplication.java      # @SpringBootApplication @EnableScheduling
 ├── api/
-│   ├── InventoryController.java      # 4 REST endpoints, delegates to service
+│   ├── InventoryController.java      # 4 REST endpoints at /api/inventory, delegates to service
 │   └── dto/
 │       ├── InventoryQuantityRequest  # @NotNull @Min(1) Integer quantity
 │       └── InventoryItemResponse     # record + static from(InventoryItem)
@@ -140,15 +117,16 @@ com.nuuly.inventory
 │   ├── SkuNotFoundException.java     # → HTTP 404 text/plain
 │   └── InsufficientInventoryException.java  # → HTTP 400 "Insufficient inventory"
 ├── service/
-│   └── InventoryService.java         # Business logic, @Transactional
+│   └── InventoryService.java         # Business logic, @Transactional, SLF4J logging
 ├── repository/
 │   └── InventoryRepository.java      # JpaRepository + @Modifying atomic UPDATE
 └── config/
-    ├── AuthorizationServerConfig.java  # OAuth2 AS, JWKSource, JwtDecoder
-    ├── SecurityConfig.java             # Two filter chains (AS + RS)
-    ├── JwkRotationService.java         # RSA key generation and rotation
-    ├── OpenApiConfig.java              # Swagger UI + OAuth2 security scheme
-    └── GlobalExceptionHandler.java     # text/plain error mapping
+    ├── SecurityConfig.java             # Single permit-all filter chain (OAuth2 disabled)
+    ├── AuthorizationServerConfig.java  # OAuth2 AS config — DISABLED (all beans commented out)
+    ├── JwkRotationService.java         # RSA key rotation — DISABLED (@Service commented out)
+    ├── RequestMetricsFilter.java       # HTTP request/response metrics logger
+    ├── OpenApiConfig.java              # Swagger UI (no OAuth2 security scheme)
+    └── GlobalExceptionHandler.java     # text/plain error mapping, SLF4J logging
 ```
 
 ### Data Model
@@ -173,10 +151,10 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/inventory` | List all inventory items |
-| `GET` | `/inventory/{skuId}` | Get current stock for a specific SKU |
-| `POST` | `/inventory/{skuId}` | Add stock (additive upsert — creates if absent, adds to existing) |
-| `POST` | `/inventory/{skuId}/purchase` | Purchase stock (atomic decrement with sufficiency check) |
+| `GET` | `/api/inventory` | List all inventory items |
+| `GET` | `/api/inventory/{skuId}` | Get current stock for a specific SKU |
+| `POST` | `/api/inventory/{skuId}` | Add stock (additive upsert — creates if absent, adds to existing) |
+| `POST` | `/api/inventory/{skuId}/purchase` | Purchase stock (atomic decrement with sufficiency check) |
 
 ### Functional Requirements
 
@@ -202,12 +180,11 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 - All error responses (`400`, `404`) use `Content-Type: text/plain` with a plain string body — not JSON.
 
 **FR-6 — API documentation**
-- Live Swagger UI at `/swagger-ui.html` with OAuth2 authorization support.
+- Live Swagger UI at `/swagger-ui.html` (no authorization required).
 
 **FR-7 — Authentication & authorization**
-- All `/inventory` endpoints require a valid JWT bearer token.
-- `GET` endpoints require scope `inventory.read`; `POST` endpoints require `inventory.write`.
-- Missing token → `401`; valid token with wrong scope → `403`.
+- OAuth2 is currently **disabled**. All endpoints are open (no token required).
+- To re-enable: uncomment `@Configuration` in `AuthorizationServerConfig.java`, `@Service` in `JwkRotationService.java`, and restore the two filter chains in `SecurityConfig.java`.
 
 **FR-8 — Seed data**
 - On startup, 100 dummy SKUs are loaded via `src/main/resources/data.sql` (Spring SQL init).
@@ -225,7 +202,8 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 | Web | Spring Web (Spring MVC) |
 | Persistence | Spring Data JPA + H2 (in-memory) |
 | Validation | Jakarta Bean Validation (`@Valid`, `@Min`, `@NotNull`) |
-| Security | Spring Security — OAuth2 Resource Server (JWT validation) + Spring Authorization Server (client-credentials token issuance), RS256 / JWK rotation |
+| Security | Spring Security — permit-all (OAuth2 disabled; config retained in source) |
+| Logging | SLF4J + Logback — console + rolling file (`logs/inventory-api.log`) |
 | API Docs | springdoc-openapi 2.x (Swagger UI) |
 | Health | Spring Boot Actuator |
 | Build | Maven 3.9+ (bundled `./mvnw` wrapper) |
@@ -301,104 +279,64 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 | `http://localhost:8080/swagger-ui.html` | Interactive API docs (Swagger UI) |
 | `http://localhost:8080/actuator/health` | Health check endpoint |
 | `http://localhost:8080/h2-console` | H2 database console (dev only) |
-| `http://localhost:8080/oauth2/token` | Token issuance endpoint |
-| `http://localhost:8080/oauth2/jwks` | Public JWK set |
 
 ---
 
 ### Quick curl examples
 
-**Get a token:**
-```bash
-TOKEN=$(curl -s -u inventory-client:inventory-secret \
-  -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
-  http://localhost:8080/oauth2/token | jq -r .access_token)
-```
+No `Authorization` header is required — OAuth2 is disabled.
 
 **List all inventory:**
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/inventory
+curl http://localhost:8080/api/inventory
 ```
 
 **Get a specific SKU:**
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/inventory/SKU-001
+curl http://localhost:8080/api/inventory/CW-0001-BM-02
 ```
 
-**Add stock:**
+**Add stock (creates SKU if absent, otherwise adds to existing):**
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"quantity": 50}' \
-  http://localhost:8080/inventory/SKU-001
+  http://localhost:8080/api/inventory/MY-SKU-001
 ```
 
 **Purchase stock:**
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"quantity": 5}' \
-  http://localhost:8080/inventory/SKU-001/purchase
+  http://localhost:8080/api/inventory/MY-SKU-001/purchase
 ```
 
 ---
 
 ## 6. API Security
 
-### Overview
+OAuth2 is currently **disabled** for development convenience. All endpoints are accessible without a token.
 
-The service implements **OAuth2 client-credentials** security with **JWT validation**. Both the Authorization Server (token issuance) and Resource Server (token validation) are co-hosted in the same application.
+### Re-enabling OAuth2
 
-| Component | Description |
-|-----------|-------------|
-| Grant type | `client_credentials` (service-to-service) |
-| Token format | RS256-signed JWT |
-| Token TTL | 10 minutes |
-| Key rotation | Every 30 minutes with a 60-minute overlap window |
+To restore full OAuth2 client-credentials security:
 
-### Endpoint access rules
+1. **`AuthorizationServerConfig.java`** — uncomment `// @Configuration` and all `// @Bean` methods.
+2. **`JwkRotationService.java`** — uncomment `// @Service`.
+3. **`SecurityConfig.java`** — uncomment `authorizationServerFilterChain` and `resourceServerFilterChain`; remove the `openFilterChain` bean.
+4. **`OpenApiConfig.java`** — restore the OAuth2 `SecurityScheme` and `SecurityRequirement` in `inventoryOpenApi()`.
+
+When re-enabled the access rules are:
 
 | Endpoint | Required scope | No token | Wrong scope |
 |----------|---------------|----------|-------------|
-| `GET /inventory` | `inventory.read` | 401 | 403 |
-| `GET /inventory/{skuId}` | `inventory.read` | 401 | 403 |
-| `POST /inventory/{skuId}` | `inventory.write` | 401 | 403 |
-| `POST /inventory/{skuId}/purchase` | `inventory.write` | 401 | 403 |
+| `GET /api/inventory` | `inventory.read` | 401 | 403 |
+| `GET /api/inventory/{skuId}` | `inventory.read` | 401 | 403 |
+| `POST /api/inventory/{skuId}` | `inventory.write` | 401 | 403 |
+| `POST /api/inventory/{skuId}/purchase` | `inventory.write` | 401 | 403 |
 
-### Permit-listed endpoints (no token required)
-
-- `/actuator/health`
-- `/swagger-ui/**`
-- `/v3/api-docs/**`
-- `/oauth2/token`
-- `/oauth2/jwks`
-
-### JWK key rotation
-
-Signing keys rotate every 30 minutes. Retired public keys remain published in the JWKS for a 60-minute overlap window (greater than the 10-minute token TTL), ensuring in-flight tokens remain valid across rotations. Keys are in-memory and reset on restart.
-
----
-
-### Testing via Swagger UI
-
-1. Open `http://localhost:8080/swagger-ui.html`
-2. Click the **Authorize** button (lock icon)
-3. Enter your `client_id`, `client_secret`, and select scopes (`inventory.read`, `inventory.write`)
-4. Click **Authorize** — Swagger fetches a bearer token automatically
-5. Use **Try it out** on any endpoint — the token is attached to every request
-
-### Testing via curl
-
-```bash
-# Step 1: Get a token
-curl -s -u inventory-client:inventory-secret \
-  -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
-  http://localhost:8080/oauth2/token
-# Response: { "access_token": "...", "token_type": "Bearer", "expires_in": 600 }
-
-# Step 2: Use the token
-curl -H "Authorization: Bearer <access_token>" http://localhost:8080/inventory
-```
+Client credentials: `inventory-client` / `inventory-secret`, grant type `client_credentials`.
 
 ---
 
@@ -417,24 +355,97 @@ Used by Docker Compose (`healthcheck`) and container orchestrators for liveness/
 
 Exposed Actuator endpoints: `health`, `info`.
 
-### Logging
+---
 
-The application uses Spring Boot's default structured logging (SLF4J + Logback):
+### Logging architecture
 
-- **Startup events:** application context initialization, datasource setup, seed data load
-- **Error events:** validation failures, domain exceptions (SKU not found, insufficient inventory), malformed requests
-- **Security events:** authentication/authorization failures are logged by Spring Security
+The application uses **SLF4J + Logback** configured via `src/main/resources/logback-spring.xml`. Logs are written to two destinations simultaneously:
 
-Log output goes to stdout (console).
+| Destination | Format | Notes |
+|-------------|--------|-------|
+| Console (stdout) | Colored, short timestamp | Human-readable during development |
+| File (`logs/inventory-api.log`) | Full timestamp, structured | Persisted; rolling by day and size |
 
-### Viewing logs
+**Log file location:** `logs/inventory-api.log` (relative to the working directory — created automatically on first startup).
 
-**Local (Maven):** logs print directly to the terminal.
+**Rolling policy:**
+- Rotates daily and when a single file exceeds **100 MB**
+- Compressed archives: `logs/inventory-api.log.YYYY-MM-DD.N.gz`
+- Retains **30 days** of history, capped at **3 GB** total
+
+**Log levels:**
+
+| Logger | Level | What it captures |
+|--------|-------|-----------------|
+| `com.nuuly.inventory` | `DEBUG` | All application code — service ops, business errors |
+| `org.hibernate.SQL` | `DEBUG` | Every SQL statement (written to file only) |
+| `org.springframework.web` | `INFO` | Spring MVC request mapping events |
+| Everything else | `INFO` | Spring Boot internals, Hikari, etc. |
+
+---
+
+### Log entry types
+
+**HTTP metrics** — logged by `RequestMetricsFilter` after every request:
+
+```
+INFO  [METRICS] GET  /api/inventory              → status=200 duration=63ms
+INFO  [METRICS] POST /api/inventory/TEST-SKU-01  → status=200 duration=69ms
+WARN  [METRICS] GET  /api/inventory/MISSING       → status=404 duration=5ms
+WARN  [METRICS] POST /api/inventory/widget/purchase → status=400 duration=3ms
+```
+
+**Business events** — logged by `InventoryService`:
+
+```
+DEBUG GET sku=CW-0001-BM-02
+DEBUG LIST all → 100 skus
+INFO  ADD_STOCK CREATED sku=TEST-SKU-01 qty=+50 total=50
+INFO  ADD_STOCK UPDATED sku=TEST-SKU-01 qty=+10 total=60
+INFO  PURCHASE SUCCESS sku=TEST-SKU-01 qty=5 remaining=55
+WARN  PURCHASE FAILED sku=TEST-SKU-01 qty=9999 reason=INSUFFICIENT_STOCK
+WARN  PURCHASE FAILED sku=GHOST qty=1 reason=SKU_NOT_FOUND
+```
+
+**Error events** — logged by `GlobalExceptionHandler`:
+
+```
+WARN  404 NOT_FOUND: SKU not found: MISSING-SKU
+WARN  400 INSUFFICIENT_INVENTORY
+WARN  400 VALIDATION_ERROR: quantity must be at least 1
+WARN  400 MALFORMED_REQUEST: JSON parse error: ...
+```
+
+---
+
+### Viewing the log file
+
+**Live tail:**
+```bash
+tail -f logs/inventory-api.log
+```
+
+**Filter only HTTP metrics:**
+```bash
+grep '\[METRICS\]' logs/inventory-api.log
+```
+
+**Filter only errors and warnings:**
+```bash
+grep -E '^.{24} (WARN |ERROR)' logs/inventory-api.log
+```
+
+**Filter by SKU:**
+```bash
+grep 'sku=CW-0001-BM-02' logs/inventory-api.log
+```
 
 **Docker Compose:**
 ```bash
 docker compose logs -f api
 ```
+
+---
 
 ### H2 Console (dev only)
 

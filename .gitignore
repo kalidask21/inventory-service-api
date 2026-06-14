@@ -8,3 +8,6 @@ target/
 # Docs and Claude
 docs/
 CLAUDE.md
+
+# Runtime log files
+logs/

@@ -25,3 +25,10 @@ management:
     web:
       exposure:
         include: health,info
+
+logging:
+  file:
+    name: logs/inventory-api.log
+  level:
+    com.nuuly.inventory: DEBUG
+    org.hibernate.SQL: DEBUG
