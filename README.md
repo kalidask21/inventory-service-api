@@ -1,6 +1,6 @@
 # Inventory Management API
 
-A RESTful service that tracks product stock by SKU. Built with Spring Boot 3.x for the Nuuly Services Assessment.
+A RESTful service that tracks product stock by SKU.
 
 ---
 
@@ -10,9 +10,8 @@ A RESTful service that tracks product stock by SKU. Built with Spring Boot 3.x f
 2. [Tech Stack](#2-tech-stack)
 3. [Prerequisites](#3-prerequisites)
 4. [Running Locally](#4-running-locally)
-5. [GCP Deployment](#5-gcp-deployment)
-6. [API Security](#6-api-security)
-7. [Observability & Logging](#7-observability--logging)
+5. [API Security](#5-api-security)
+6. [Observability & Logging](#6-observability--logging)
 
 ---
 
@@ -78,7 +77,6 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 | Health | Spring Boot Actuator |
 | Build | Maven 3.9+ (bundled `./mvnw` wrapper) |
 | Container | Docker (multi-stage) + Docker Compose |
-| Cloud | GCP Cloud Run + Artifact Registry |
 
 ---
 
@@ -99,14 +97,6 @@ The Inventory Management API tracks product stock keyed by SKU. It exposes four 
 | Docker Compose | v2+ (`docker compose`) |
 
 No external database or message broker is required — the app uses an embedded H2 in-memory store.
-
-### GCP Deployment
-
-| Requirement | Notes |
-|-------------|-------|
-| Google Cloud SDK (`gcloud`) | Authenticated and configured |
-| GCP Project | With billing enabled |
-| APIs enabled | Cloud Run, Artifact Registry, Cloud Build |
 
 ---
 
@@ -141,7 +131,7 @@ docker build -t inventory-api:local .
 docker run -p 8080:8080 inventory-api:local
 ```
 
-### Option C — Docker Compose (recommended for full stack)
+### Option C — Docker Compose (recommended)
 
 ```bash
 docker compose up --build
@@ -159,15 +149,15 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 | `http://localhost:8080/actuator/health` | Health check endpoint |
 | `http://localhost:8080/h2-console` | H2 database console (dev only) |
 | `http://localhost:8080/oauth2/token` | Token issuance endpoint |
-| `http://localhost:8080/oauth2/jwks` | Public JWK set (key validation) |
+| `http://localhost:8080/oauth2/jwks` | Public JWK set |
 
 ---
 
 ### Quick curl examples
 
-**Get a token:**
+**Get a token** (replace `<client_id>` and `<client_secret>` with your configured credentials):
 ```bash
-TOKEN=$(curl -s -u inventory-client:inventory-secret \
+TOKEN=$(curl -s -u <client_id>:<client_secret> \
   -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
   http://localhost:8080/oauth2/token | jq -r .access_token)
 ```
@@ -179,7 +169,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/inventory
 
 **Get a specific SKU:**
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/inventory/CW-0001-BM-02
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/inventory/SKU-001
 ```
 
 **Add stock:**
@@ -200,55 +190,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## 5. GCP Deployment
-
-The application is containerized and deployable to GCP Cloud Run.
-
-> **Note on H2 in-memory storage:** H2 is per-instance and ephemeral. With multiple Cloud Run instances, each instance holds independent stock, and data resets on restart. For production, replace H2 with Cloud SQL (Postgres) via a `gcp` Spring profile — this is a configuration-level change.
-
-### One-time setup
-
-```bash
-# Authenticate
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-# Create Artifact Registry repository
-gcloud artifacts repositories create inventory-repo \
-  --repository-format=docker \
-  --location=us-central1
-```
-
-### Build and push
-
-```bash
-gcloud builds submit \
-  --tag us-central1-docker.pkg.dev/YOUR_PROJECT_ID/inventory-repo/inventory-api:latest
-```
-
-### Deploy to Cloud Run
-
-```bash
-gcloud run deploy inventory-api \
-  --image us-central1-docker.pkg.dev/YOUR_PROJECT_ID/inventory-repo/inventory-api:latest \
-  --region us-central1 \
-  --platform managed \
-  --allow-unauthenticated \
-  --port 8080 \
-  --memory 512Mi \
-  --min-instances 0 \
-  --max-instances 3
-```
-
-Cloud Run uses `/actuator/health` for liveness and readiness checks automatically.
-
-### Optional CI/CD
-
-Set up a Cloud Build trigger or GitHub Actions workflow to build, push, and deploy on every push to `main`.
-
----
-
-## 6. API Security
+## 5. API Security
 
 ### Overview
 
@@ -278,16 +220,6 @@ The service implements **OAuth2 client-credentials** security with **JWT validat
 - `/oauth2/token`
 - `/oauth2/jwks`
 
-### Sample client credentials (demo only)
-
-| Field | Value |
-|-------|-------|
-| `client_id` | `inventory-client` |
-| `client_secret` | `inventory-secret` |
-| Scopes | `inventory.read`, `inventory.write` |
-
-> These are sample/demo values only. Do not use in production.
-
 ### JWK key rotation
 
 Signing keys rotate every 30 minutes. Retired public keys remain published in the JWKS for a 60-minute overlap window (greater than the 10-minute token TTL), ensuring in-flight tokens remain valid across rotations. Keys are in-memory and reset on restart.
@@ -298,10 +230,7 @@ Signing keys rotate every 30 minutes. Retired public keys remain published in th
 
 1. Open `http://localhost:8080/swagger-ui.html`
 2. Click the **Authorize** button (lock icon)
-3. Enter:
-   - **client_id:** `inventory-client`
-   - **client_secret:** `inventory-secret`
-   - Select scopes: `inventory.read`, `inventory.write`
+3. Enter your `client_id`, `client_secret`, and select scopes (`inventory.read`, `inventory.write`)
 4. Click **Authorize** — Swagger fetches a bearer token automatically
 5. Use **Try it out** on any endpoint — the token is attached to every request
 
@@ -309,10 +238,9 @@ Signing keys rotate every 30 minutes. Retired public keys remain published in th
 
 ```bash
 # Step 1: Get a token
-curl -s -u inventory-client:inventory-secret \
+curl -s -u <client_id>:<client_secret> \
   -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
   http://localhost:8080/oauth2/token
-
 # Response: { "access_token": "...", "token_type": "Bearer", "expires_in": 600 }
 
 # Step 2: Use the token
@@ -321,7 +249,7 @@ curl -H "Authorization: Bearer <access_token>" http://localhost:8080/inventory
 
 ---
 
-## 7. Observability & Logging
+## 6. Observability & Logging
 
 ### Health endpoint
 
@@ -332,9 +260,7 @@ curl http://localhost:8080/actuator/health
 # { "status": "UP" }
 ```
 
-This endpoint is used by:
-- Docker Compose (`healthcheck` in `docker-compose.yml`)
-- GCP Cloud Run (liveness/readiness probe)
+Used by Docker Compose (`healthcheck`) and container orchestrators for liveness/readiness probes.
 
 Exposed Actuator endpoints: `health`, `info`.
 
@@ -346,9 +272,7 @@ The application uses Spring Boot's default structured logging (SLF4J + Logback):
 - **Error events:** validation failures, domain exceptions (SKU not found, insufficient inventory), malformed requests
 - **Security events:** authentication/authorization failures are logged by Spring Security
 
-Log output goes to stdout (console), which is captured by:
-- Docker / Docker Compose logs (`docker compose logs -f`)
-- GCP Cloud Logging automatically when running on Cloud Run
+Log output goes to stdout (console).
 
 ### Viewing logs
 
@@ -359,19 +283,8 @@ Log output goes to stdout (console), which is captured by:
 docker compose logs -f api
 ```
 
-**GCP Cloud Run:**
-```bash
-gcloud run services logs read inventory-api --region us-central1 --limit 100
-```
-
-Or view in the GCP Console under **Cloud Run → inventory-api → Logs**.
-
 ### H2 Console (dev only)
 
-The H2 in-memory database console is available at `http://localhost:8080/h2-console` during local development:
+The H2 in-memory database console is available at `http://localhost:8080/h2-console` during local development.
 
-- **JDBC URL:** `jdbc:h2:mem:inventory`
-- **Username:** `sa`
-- **Password:** _(empty)_
-
-> The H2 console is disabled outside the local/dev profile and is not exposed in production.
+> The H2 console is disabled outside the local/dev profile and must not be exposed in production.
