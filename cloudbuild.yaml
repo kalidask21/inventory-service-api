@@ -41,5 +41,4 @@ images:
   - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
 
 options:
-  logging: GCS_ONLY
-  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET
+  logging: NONE
