@@ -1,4 +1,4 @@
-serviceAccount: 'projects/gcpessesentials/serviceAccounts/cloud-build-sa@gcpessesentials.iam.gserviceaccount.com'
+serviceAccount: 'projects/inboxcapital/serviceAccounts/cloud-build-sa@inboxcapital.iam.gserviceaccount.com'
 
 steps:
   # Step 1: Write Docker credentials into shared volume
@@ -17,9 +17,9 @@ steps:
     args:
       - build
       - -t
-      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
+      - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
       - -t
-      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
+      - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:latest
       - .
     volumes:
       - name: 'docker-config'
@@ -30,7 +30,7 @@ steps:
     args:
       - push
       - --all-tags
-      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api
+      - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api
     volumes:
       - name: 'docker-config'
         path: '/root/.docker'
@@ -42,7 +42,7 @@ steps:
       - run
       - deploy
       - inventory-api
-      - --image=us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
+      - --image=us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
       - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
@@ -54,8 +54,8 @@ steps:
       - --set-env-vars=SPRING_PROFILES_ACTIVE=default
 
 images:
-  - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
-  - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
+  - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
+  - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:latest
 
 options:
   logging: NONE
