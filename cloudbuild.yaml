@@ -1,15 +1,18 @@
 serviceAccount: 'projects/gcpessesentials/serviceAccounts/cloud-build-sa@gcpessesentials.iam.gserviceaccount.com'
 
 steps:
-  # Authenticate Docker to Artifact Registry
+  # Step 1: Write Docker credentials into shared volume
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - auth
       - configure-docker
       - us-central1-docker.pkg.dev
+    volumes:
+      - name: 'docker-config'
+        path: '/root/.docker'
 
-  # Build the Docker image
+  # Step 2: Build — reads credentials from shared volume
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - build
@@ -18,15 +21,21 @@ steps:
       - -t
       - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
       - .
+    volumes:
+      - name: 'docker-config'
+        path: '/root/.docker'
 
-  # Push both tags to Artifact Registry
+  # Step 3: Push — reads credentials from shared volume
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - push
       - --all-tags
       - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api
+    volumes:
+      - name: 'docker-config'
+        path: '/root/.docker'
 
-  # Deploy to Cloud Run
+  # Step 4: Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
