@@ -6,9 +6,9 @@ steps:
     args:
       - build
       - -t
-      - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
+      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
       - -t
-      - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
+      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
       - .
 
   # Push both tags to Artifact Registry
@@ -16,7 +16,7 @@ steps:
     args:
       - push
       - --all-tags
-      - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api
+      - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -25,8 +25,8 @@ steps:
       - run
       - deploy
       - inventory-api
-      - --image=europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
-      - --region=europe-west1
+      - --image=us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
+      - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
       - --port=8080
@@ -37,8 +37,8 @@ steps:
       - --set-env-vars=SPRING_PROFILES_ACTIVE=default
 
 images:
-  - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
-  - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
+  - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:$COMMIT_SHA
+  - us-central1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
 
 options:
   logging: NONE
