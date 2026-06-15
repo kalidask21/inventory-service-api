@@ -1,6 +1,14 @@
 serviceAccount: 'projects/gcpessesentials/serviceAccounts/cloud-build-sa@gcpessesentials.iam.gserviceaccount.com'
 
 steps:
+  # Authenticate Docker to Artifact Registry
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - auth
+      - configure-docker
+      - us-central1-docker.pkg.dev
+
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
