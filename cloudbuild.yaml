@@ -41,4 +41,4 @@ images:
   - europe-west1-docker.pkg.dev/gcpessesentials/inventory-repo/inventory-api:latest
 
 options:
-  logging: GCS_ONLY
+  logging: CLOUD_LOGGING_ONLY
