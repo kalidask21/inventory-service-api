@@ -17,7 +17,7 @@ steps:
     args:
       - build
       - -t
-      - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
+      - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$BUILD_ID
       - -t
       - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:latest
       - .
@@ -42,7 +42,7 @@ steps:
       - run
       - deploy
       - inventory-api
-      - --image=us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
+      - --image=us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$BUILD_ID
       - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
@@ -54,7 +54,7 @@ steps:
       - --set-env-vars=SPRING_PROFILES_ACTIVE=default
 
 images:
-  - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$COMMIT_SHA
+  - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:$BUILD_ID
   - us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api:latest
 
 options:
