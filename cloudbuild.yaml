@@ -1,3 +1,5 @@
+serviceAccount: 'projects/gcpessesentials/serviceAccounts/cloud-build-sa@gcpessesentials.iam.gserviceaccount.com'
+
 steps:
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
