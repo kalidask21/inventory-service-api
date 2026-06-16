@@ -2,6 +2,8 @@
 
 A RESTful service that tracks product stock by SKU, secured with OAuth2 client-credentials.
 
+**Live demo:** [https://inventory-api-4rrmxognkq-uc.a.run.app/swagger-ui/index.html](https://inventory-api-4rrmxognkq-uc.a.run.app/swagger-ui/index.html)
+
 ---
 
 ## Table of Contents
@@ -289,10 +291,11 @@ The Compose file defines one service (`api`) on port `8080` with an Actuator hea
 
 | URL | Description |
 |-----|-------------|
-| `http://localhost:8080/swagger-ui.html` | Interactive API docs — click **Authorize** to log in |
-| `http://localhost:8080/oauth2/token` | Token endpoint (POST, Basic auth) |
-| `http://localhost:8080/actuator/health` | Health check endpoint |
-| `http://localhost:8080/h2-console` | H2 database console (dev only) |
+| [https://inventory-api-4rrmxognkq-uc.a.run.app/swagger-ui/index.html](https://inventory-api-4rrmxognkq-uc.a.run.app/swagger-ui/index.html) | **Live** — Swagger UI on Cloud Run |
+| `http://localhost:8080/swagger-ui.html` | Local — Interactive API docs — click **Authorize** to log in |
+| `http://localhost:8080/oauth2/token` | Local — Token endpoint (POST, Basic auth) |
+| `http://localhost:8080/actuator/health` | Local — Health check endpoint |
+| `http://localhost:8080/h2-console` | Local — H2 database console (dev only) |
 
 ---
 
