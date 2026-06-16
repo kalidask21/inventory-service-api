@@ -15,6 +15,7 @@ A RESTful service that tracks product stock by SKU, secured with OAuth2 client-c
 5. [Running Locally](#5-running-locally)
 6. [API Security](#6-api-security)
 7. [Observability & Logging](#7-observability--logging)
+8. [CI/CD Pipeline](#8-cicd-pipeline)
 
 ---
 
@@ -548,3 +549,150 @@ SELECT * FROM inventory LIMIT 10;
 ```
 
 > The H2 console is disabled outside the local/dev profile and must not be exposed in production.
+
+---
+
+## 8. CI/CD Pipeline
+
+Every push to `main` automatically builds, packages, and deploys the service to GCP Cloud Run via Cloud Build.
+
+### Pipeline overview
+
+```
+git push → GitHub → Cloud Build Trigger
+                         │
+                         ▼
+              Step 1: gcloud auth configure-docker
+                         │
+                         ▼
+              Step 2: docker build (multi-stage)
+                         │
+                         ▼
+              Step 3: docker push → Artifact Registry
+                         │
+                         ▼
+              Step 4: gcloud run deploy → Cloud Run
+                         │
+                         ▼
+              https://inventory-api-4rrmxognkq-uc.a.run.app
+```
+
+### Infrastructure
+
+| Resource | Value |
+|----------|-------|
+| GCP Project | `inboxcapital` |
+| Region | `us-central1` |
+| Artifact Registry repo | `inventory-repo` |
+| Docker image | `us-central1-docker.pkg.dev/inboxcapital/inventory-repo/inventory-api` |
+| Cloud Run service | `inventory-api` |
+| Cloud Build SA | `cloud-build-sa@inboxcapital.iam.gserviceaccount.com` |
+
+### Build configuration — `cloudbuild.yaml`
+
+The pipeline is defined in `cloudbuild.yaml` at the repository root. It runs four sequential steps, all sharing a Docker credential volume so each isolated step container can authenticate to Artifact Registry.
+
+```
+Step 1 — Auth        gcloud auth configure-docker us-central1-docker.pkg.dev
+Step 2 — Build       docker build (multi-stage Dockerfile, tags :$BUILD_ID and :latest)
+Step 3 — Push        docker push --all-tags → Artifact Registry
+Step 4 — Deploy      gcloud run deploy → Cloud Run (image :$BUILD_ID)
+```
+
+> `$BUILD_ID` is used as the image tag instead of `$COMMIT_SHA` because `$BUILD_ID` is always populated by Cloud Build regardless of invocation method (trigger or manual submit), while `$COMMIT_SHA` is only set for trigger-based runs.
+
+### Service account IAM roles
+
+Cloud Build runs under a user-managed service account (`cloud-build-sa`) with four roles:
+
+| Role | Purpose |
+|------|---------|
+| `roles/artifactregistry.writer` | Push Docker images to Artifact Registry |
+| `roles/run.admin` | Deploy and update Cloud Run revisions |
+| `roles/iam.serviceAccountUser` | Impersonate the Cloud Run runtime SA during deploy |
+| `roles/storage.objectAdmin` | Read source archive uploaded by `gcloud builds submit` |
+
+### Cloud Run service settings
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Port | `8080` | Spring Boot default |
+| Memory | `512Mi` | Sufficient for JVM + H2 |
+| CPU | `1 vCPU` | Single core |
+| Min instances | `0` | Scales to zero when idle (cold start ~10–15 s) |
+| Max instances | `3` | Horizontal scale cap |
+| Auth | `--allow-unauthenticated` | OAuth2 is enforced by the application itself |
+| Spring profile | `default` | Loads 100 seed SKUs on startup |
+
+### Automatic trigger
+
+A Cloud Build trigger is connected to the GitHub repository (`kalidask21/inventory-service-api`). Any push to the `main` branch fires the pipeline automatically — no manual steps required.
+
+### Manual build
+
+To trigger a build from the command line without pushing to GitHub:
+
+```bash
+gcloud builds submit \
+  --config=cloudbuild.yaml \
+  --project=inboxcapital \
+  .
+```
+
+### View build history
+
+```bash
+# List recent builds
+gcloud builds list --limit=5 --project=inboxcapital
+
+# Stream logs for the latest build
+gcloud builds log \
+  $(gcloud builds list --limit=1 --format='value(id)' --project=inboxcapital) \
+  --project=inboxcapital
+```
+
+### View Cloud Run logs
+
+```bash
+# Tail live logs from Cloud Run
+gcloud logging tail \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=inventory-api" \
+  --project=inboxcapital
+
+# Filter HTTP metrics only
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="inventory-api" AND textPayload=~"METRICS"' \
+  --project=inboxcapital \
+  --limit=50 \
+  --format='value(textPayload)'
+```
+
+### Verify a deployment
+
+```bash
+SERVICE_URL=https://inventory-api-4rrmxognkq-uc.a.run.app
+
+# Health check
+curl $SERVICE_URL/actuator/health
+
+# Fetch a token
+TOKEN=$(curl -s \
+  -u inventory-client:inventory-secret \
+  -d 'grant_type=client_credentials&scope=inventory.read inventory.write' \
+  $SERVICE_URL/oauth2/token \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Call the API
+curl -H "Authorization: Bearer $TOKEN" $SERVICE_URL/api/inventory
+```
+
+### Troubleshooting
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `invalid value for build.service_account` | GCP org policy requires user-managed SA | Ensure `cloud-build-sa` exists and the trigger SA field is set |
+| `storage.objects.get` 403 | SA missing GCS read permission | Grant `roles/storage.objectAdmin` to `cloud-build-sa` |
+| `docker push` fails in ~1 s | Docker credentials not shared across step containers | Ensure all steps mount the `docker-config` named volume |
+| `invalid image name "...:"`  | `$COMMIT_SHA` is empty (manual submit) | Use `$BUILD_ID` — already fixed in `cloudbuild.yaml` |
+| `Permission denied on Cloud Run` | SA missing `run.admin` or `iam.serviceAccountUser` | Re-grant the IAM roles listed above |
+| `Build log write failed` | Cloud Logging blocked by org policy | `options: logging: NONE` — already set in `cloudbuild.yaml` |
